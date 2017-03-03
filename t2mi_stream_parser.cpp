@@ -200,6 +200,7 @@ L1_info ParseL1(unsigned char* L1)
 	return var_L1_info;
 }
 
+
 int main()
 {
 	FILE* fp;
@@ -213,9 +214,10 @@ int main()
 		system("pause");
 		return 0;
 	}
-	delete[] input_string;
 	printf("\nFile found. Processing...\n\n");
-	FILE* fout = fopen("output.txt", "wt");
+	strcat(input_string, "_output.txt");
+	FILE* fout = fopen(input_string, "wt");
+	delete[] input_string;
 	fprintf(fout, "      # type pkt_count sframe_idx stream_id payl_len frame_idx PLP_ID #_BB ILFS   DFL CRC8^mode calc'd_CRC32    CRC32 errors\n\n");
 
 	ts_byte_counter = 0;
@@ -275,7 +277,11 @@ int main()
 		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len);
 
 		if (current_t2frame_info.type == 0x10)
+		{
 			current_L1_info = ParseL1(temp_array);
+			//for (unsigned char i = 0; i < current_t2frame_info.payload_len; i++)				// output L1 content
+			//	fprintf(fout, "%02x ", temp_array[i]);
+		}
 
 		previous_crc = crcSlow(temp_array, current_t2frame_info.payload_len, previous_crc);
 		fprintf(fout, "                                               %08x ", previous_crc);
