@@ -279,12 +279,21 @@ int main()
 		if (current_t2frame_info.type == 0x10)
 		{
 			current_L1_info = ParseL1(temp_array);
-			//for (unsigned char i = 0; i < current_t2frame_info.payload_len; i++)				// output L1 content
-			//	fprintf(fout, "%02x ", temp_array[i]);
+			fprintf(fout, "\n");
+			for (unsigned char i = 0; i < current_t2frame_info.payload_len; i++)				// output L1 content
+				fprintf(fout, "%02x ", temp_array[i]);
+			fprintf(fout, "\n                                                                                                   ");
+		}
+		else if (current_t2frame_info.type == 0x20)
+		{
+			fprintf(fout, "\n");
+			for (unsigned char i = 0; i < current_t2frame_info.payload_len; i++)				// output timestamp content
+				fprintf(fout, "%02x ", temp_array[i]);
+			fprintf(fout, "\n                                                                                                   ");
 		}
 
 		previous_crc = crcSlow(temp_array, current_t2frame_info.payload_len, previous_crc);
-		fprintf(fout, "                                               %08x ", previous_crc);
+		fprintf(fout, " %08x ", previous_crc);
 		delete[] temp_array;
 	}
 	else
