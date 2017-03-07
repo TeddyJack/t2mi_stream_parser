@@ -6,6 +6,9 @@ extern "C"				// third-party C-libraries (not C++) are not included easily in Vi
 	#include "crc.h"
 }
 
+#define PAYLOAD 0
+#define NOT_PAYL 1
+
 
 // data types
 struct ts_packet_info
@@ -48,7 +51,7 @@ bb_frame_info current_bbframe_info;
 L1_info current_L1_info;
 unsigned char ts_byte_counter;
 unsigned long long packet_counter;
-
+bool first_accumulation;
 
 
 
@@ -120,11 +123,10 @@ ts_packet_info ParseTSHeader(FILE* fp)
 	return var_tspacket_info;	
 }
 
-unsigned char* AccumulateBytes(FILE* fp, unsigned short n)	// Accumulates n bytes into array, skipping TS headers
+unsigned char* AccumulateBytes(FILE* fp, unsigned short n, int flag)	// Accumulates n bytes into array, skipping TS headers
 {
 	unsigned short i = 0;
 	unsigned char* array = new unsigned char[n];
-	ts_packet_info current_tspacket_info;
 	LOOP_1:
 	if (ts_byte_counter == 0)
 	{
@@ -140,6 +142,7 @@ unsigned char* AccumulateBytes(FILE* fp, unsigned short n)	// Accumulates n byte
 			goto LOOP_2;
 		}
 	}
+
 	array[i] = fgetc(fp);
 	if (ts_byte_counter < 187)
 		ts_byte_counter++;
@@ -153,7 +156,6 @@ unsigned char* AccumulateBytes(FILE* fp, unsigned short n)	// Accumulates n byte
 
 void FindFirstT2Frame(FILE* fp)
 {
-	ts_packet_info current_tspacket_info;
 	LOOP:
 	packet_counter++;
 	current_tspacket_info = ParseTSHeader(fp);
@@ -222,18 +224,22 @@ int main()
 
 	ts_byte_counter = 0;
 	packet_counter = 0;
+	first_accumulation = false;
 	crc previous_crc;
-	t2_frame_info current_t2frame_info;
-	bb_frame_info current_bbframe_info;
 	unsigned int crc_32;
 	unsigned char previous_pkt_count = 0;
 	unsigned char BBframe_num = 0;
 	bool error_plp_num_blocks = false;
-
+	
 	FindFirstT2Frame(fp);
 
 	LOOP:
-	unsigned char* temp_array = AccumulateBytes(fp, 6);
+	if (current_tspacket_info.PUSI == true)
+	{
+		if (current_tspacket_info.pointer_value != (ts_byte_counter - current_tspacket_info.header_len))
+			fprintf(fout, "PF = %d, actual offset = %d\n", current_tspacket_info.pointer_value, (ts_byte_counter - current_tspacket_info.header_len));
+	}
+	unsigned char* temp_array = AccumulateBytes(fp, 6, NOT_PAYL);
 	previous_crc = crcSlow(temp_array, 6, 0xFFFFFFFF);
 	current_t2frame_info = ParseT2Header(temp_array);
 
@@ -246,7 +252,7 @@ int main()
 
 	if (current_t2frame_info.type == 0x00)
 	{
-		temp_array = AccumulateBytes(fp, 13);
+		temp_array = AccumulateBytes(fp, 13, NOT_PAYL);
 		previous_crc = crcSlow(temp_array, 13, previous_crc);
 		current_bbframe_info = ParseBBHeader(temp_array);
 
@@ -265,7 +271,7 @@ int main()
 		fprintf(fout, "%5d ", current_bbframe_info.dfl);
 		fprintf(fout, "       %02x ", current_bbframe_info.crc8_xor_mode);
 
-		temp_array = AccumulateBytes(fp, current_bbframe_info.dfl);
+		temp_array = AccumulateBytes(fp, current_bbframe_info.dfl, NOT_PAYL);
 		previous_crc = crcSlow(temp_array, current_bbframe_info.dfl, previous_crc);
 		fprintf(fout, "    %08x ", previous_crc);
 		delete[] temp_array;
@@ -274,26 +280,13 @@ int main()
 				(current_t2frame_info.type == 0x10) ||
 				(current_t2frame_info.type == 0x11)		)
 	{
-		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len);
+		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len, PAYLOAD);
 
 		if (current_t2frame_info.type == 0x10)
-		{
 			current_L1_info = ParseL1(temp_array);
-			fprintf(fout, "\n");
-			for (unsigned char i = 0; i < current_t2frame_info.payload_len; i++)				// output L1 content
-				fprintf(fout, "%02x ", temp_array[i]);
-			fprintf(fout, "\n                                                                                                   ");
-		}
-		else if (current_t2frame_info.type == 0x20)
-		{
-			fprintf(fout, "\n");
-			for (unsigned char i = 0; i < current_t2frame_info.payload_len; i++)				// output timestamp content
-				fprintf(fout, "%02x ", temp_array[i]);
-			fprintf(fout, "\n                                                                                                   ");
-		}
 
 		previous_crc = crcSlow(temp_array, current_t2frame_info.payload_len, previous_crc);
-		fprintf(fout, " %08x ", previous_crc);
+		fprintf(fout, "                                               %08x ", previous_crc);
 		delete[] temp_array;
 	}
 	else
@@ -302,7 +295,7 @@ int main()
 		return 0;
 	}
 
-	temp_array = AccumulateBytes(fp, 4);
+	temp_array = AccumulateBytes(fp, 4, NOT_PAYL);
 	crc_32 = Array2Int(temp_array, 4);
 	delete[] temp_array;
 	fprintf(fout, "%08x ", crc_32);
@@ -317,9 +310,6 @@ int main()
 		error_plp_num_blocks = false;
 	}
 	fprintf(fout, "\n");
-
-	if (current_t2frame_info.type == 0x10)
-		fprintf(fout, "plp_num_blocks = %d\n", current_L1_info.plp_num_blocks);
 
 	if (!feof(fp))
 		goto LOOP;
