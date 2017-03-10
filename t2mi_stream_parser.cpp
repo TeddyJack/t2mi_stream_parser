@@ -6,8 +6,8 @@ extern "C"				// third-party C-libraries (not C++) are not included easily in Vi
 	#include "crc.h"
 }
 
-#define PAYLOAD 0
-#define NOT_PAYL 1
+#define T2_HEADER	0
+#define OTHER		1
 
 
 // data types
@@ -38,11 +38,13 @@ struct bb_frame_info
 	unsigned short syncd;
 	unsigned char crc8_xor_mode;
 	unsigned char calculated_crc8;
+	bool calculated_mode;			// NM = 0, HEM = 1
+	unsigned char upl;
 };
 struct L1_info
 {
 	unsigned char plp_num_blocks;
-	bool plp_mode;
+	bool plp_mode;			// NM = 0, HEM = 1
 };
 
 // global vars
@@ -166,6 +168,8 @@ ts_packet_info ParseTSHeader(FILE* fp)
 
 unsigned char* AccumulateBytes(FILE* fp, unsigned short n, int flag)	// Accumulates n bytes into array, skipping TS headers
 {
+	if((flag == T2_HEADER) && (first_accumulation == true))
+		first_accumulation = false;
 	unsigned short i = 0;
 	unsigned char* array = new unsigned char[n];
 	LOOP_1:
@@ -182,6 +186,8 @@ unsigned char* AccumulateBytes(FILE* fp, unsigned short n, int flag)	// Accumula
 			fseek(fp, (188 - current_tspacket_info.header_len), SEEK_CUR); ts_byte_counter = 0;
 			goto LOOP_2;
 		}
+
+		first_accumulation = true;
 	}
 
 	array[i] = fgetc(fp);
@@ -230,7 +236,15 @@ bb_frame_info ParseBBHeader(unsigned char* header)	// 3 + 10 bytes
 	var_bbframe_info.dfl = ((header[7] << 8) + header[8]) >> 3;	// in bytes
 	var_bbframe_info.syncd = ((header[10] << 8) + header[11]) >> 3;	// in bytes
 	var_bbframe_info.crc8_xor_mode = header[12];
+	var_bbframe_info.calculated_crc8 = crc8Slow((header + 3), 9, 0);
+	if ((var_bbframe_info.crc8_xor_mode & 0xFE) != (var_bbframe_info.calculated_crc8 & 0xFE))
+		printf("ts pkt = %d; in BB-frame: crc8^mode = %02x, calculated crc8 = %02x\n",packet_counter, var_bbframe_info.crc8_xor_mode, var_bbframe_info.calculated_crc8);
+	var_bbframe_info.calculated_mode = var_bbframe_info.crc8_xor_mode ^ var_bbframe_info.calculated_crc8;
 
+	if (var_bbframe_info.calculated_mode == false)
+		var_bbframe_info.upl = ((header[5] << 8) + header[6]) >> 3;
+	else
+		var_bbframe_info.upl = 187;
 	delete[] header;
 	return var_bbframe_info;
 }
@@ -285,7 +299,7 @@ int main()
 	first_accumulation = false;
 	inner_ts_start_found = false;
 	actual_syncd = 0;
-	crc previous_crc;
+	crc32 previous_crc;
 	unsigned int crc_32;
 	unsigned char previous_pkt_count = 0;
 	unsigned char BBframe_num = 0;
@@ -294,13 +308,8 @@ int main()
 	FindFirstT2Frame(fp);
 
 	LOOP:
-	if (current_tspacket_info.PUSI == true)
-	{
-		if (current_tspacket_info.pointer_value != (ts_byte_counter - current_tspacket_info.header_len))
-			fprintf(fout, "PF = %d, actual offset = %d\n", current_tspacket_info.pointer_value, (ts_byte_counter - current_tspacket_info.header_len));
-	}
-	unsigned char* temp_array = AccumulateBytes(fp, 6, NOT_PAYL);
-	previous_crc = crcSlow(temp_array, 6, 0xFFFFFFFF);
+	unsigned char* temp_array = AccumulateBytes(fp, 6, T2_HEADER);
+	previous_crc = crc32Slow(temp_array, 6, 0xFFFFFFFF);
 	current_t2frame_info = ParseT2Header(temp_array);
 
 	fprintf(fout, "%7d ", packet_counter);
@@ -312,8 +321,8 @@ int main()
 
 	if (current_t2frame_info.type == 0x00)
 	{
-		temp_array = AccumulateBytes(fp, 13, NOT_PAYL);
-		previous_crc = crcSlow(temp_array, 13, previous_crc);
+		temp_array = AccumulateBytes(fp, 13, OTHER);
+		previous_crc = crc32Slow(temp_array, 13, previous_crc);
 		current_bbframe_info = ParseBBHeader(temp_array);
 
 		fprintf(fout, "       %02x ", current_bbframe_info.frame_idx);
@@ -331,9 +340,9 @@ int main()
 		fprintf(fout, "%5d ", current_bbframe_info.dfl);
 		fprintf(fout, "       %02x ", current_bbframe_info.crc8_xor_mode);
 
-		temp_array = AccumulateBytes(fp, current_bbframe_info.dfl, PAYLOAD);
+		temp_array = AccumulateBytes(fp, current_bbframe_info.dfl, OTHER);
 		SendToFile(f_inner, temp_array, current_bbframe_info.dfl);
-		previous_crc = crcSlow(temp_array, current_bbframe_info.dfl, previous_crc);
+		previous_crc = crc32Slow(temp_array, current_bbframe_info.dfl, previous_crc);
 		fprintf(fout, "    %08x ", previous_crc);
 		delete[] temp_array;
 	}
@@ -341,12 +350,12 @@ int main()
 				(current_t2frame_info.type == 0x10) ||
 				(current_t2frame_info.type == 0x11)		)
 	{
-		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len, NOT_PAYL);
+		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len, OTHER);
 
 		if (current_t2frame_info.type == 0x10)
 			current_L1_info = ParseL1(temp_array);
 
-		previous_crc = crcSlow(temp_array, current_t2frame_info.payload_len, previous_crc);
+		previous_crc = crc32Slow(temp_array, current_t2frame_info.payload_len, previous_crc);
 		fprintf(fout, "                                               %08x ", previous_crc);
 		delete[] temp_array;
 	}
@@ -356,7 +365,7 @@ int main()
 		return 0;
 	}
 
-	temp_array = AccumulateBytes(fp, 4, NOT_PAYL);
+	temp_array = AccumulateBytes(fp, 4, OTHER);
 	crc_32 = Array2Int(temp_array, 4);
 	delete[] temp_array;
 	fprintf(fout, "%08x ", crc_32);
@@ -371,6 +380,12 @@ int main()
 		error_plp_num_blocks = false;
 	}
 	fprintf(fout, "\n");
+	// check pointer_field
+	if ((current_tspacket_info.PUSI == true) && (first_accumulation == true))
+	{
+		if (current_tspacket_info.pointer_value != (ts_byte_counter - current_tspacket_info.header_len))
+			fprintf(fout, "For next T2-MI packet: PF = %d, actual offset = %d\n", current_tspacket_info.pointer_value, (ts_byte_counter - current_tspacket_info.header_len));
+	}
 
 	if (!feof(fp))
 		goto LOOP;
