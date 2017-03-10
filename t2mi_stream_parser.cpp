@@ -35,6 +35,7 @@ struct bb_frame_info
 	unsigned char PLP_id;
 	bool IL_frame_start;
 	unsigned short dfl;
+	unsigned short syncd;
 	unsigned char crc8_xor_mode;
 	unsigned char calculated_crc8;
 };
@@ -52,8 +53,48 @@ L1_info current_L1_info;
 unsigned char ts_byte_counter;
 unsigned long long packet_counter;
 bool first_accumulation;
+bool inner_ts_start_found;
+unsigned char actual_syncd;
 
+void SendToFile(FILE* file, unsigned char* array, unsigned short len)
+{
+	if (current_bbframe_info.syncd != actual_syncd)
+		printf("ts pkt = %d; syncd = %d; actual offset = %d\n", packet_counter, current_bbframe_info.syncd, actual_syncd);
+	unsigned char m = 0;
+	unsigned short i = 0;
+	unsigned char sync_byte = 0x47;
+	unsigned char* p_sync_byte = &sync_byte;
+	if (!inner_ts_start_found)
+	{
+		i += current_bbframe_info.syncd;
+		inner_ts_start_found = true;
+	}
 
+	if (actual_syncd != 0)
+		goto INSERT_PAYLOAD;
+	
+	INSERT_SYNC:
+	fwrite(p_sync_byte, 1, 1, file);
+
+	INSERT_PAYLOAD:
+	if (actual_syncd != 0)
+	{
+		m = actual_syncd;
+		actual_syncd = 0;
+	}
+	else if ((len - i) > 187)
+		m = 187;
+	else
+		m = len - i;
+	fwrite((array + i), 1, m, file);
+	i += m;
+
+	if (i < len)
+		goto INSERT_SYNC;
+	else
+		actual_syncd = 187 - m;
+	
+}
 
 unsigned int Array2Int(unsigned char* array, unsigned char n)	// max n = 4;
 {
@@ -187,6 +228,7 @@ bb_frame_info ParseBBHeader(unsigned char* header)	// 3 + 10 bytes
 	var_bbframe_info.PLP_id = header[1];
 	var_bbframe_info.IL_frame_start = ExtractBits(header[2], 7, 7);
 	var_bbframe_info.dfl = ((header[7] << 8) + header[8]) >> 3;	// in bytes
+	var_bbframe_info.syncd = ((header[10] << 8) + header[11]) >> 3;	// in bytes
 	var_bbframe_info.crc8_xor_mode = header[12];
 
 	delete[] header;
@@ -202,6 +244,14 @@ L1_info ParseL1(unsigned char* L1)
 	return var_L1_info;
 }
 
+void RemoveExtension(char* filename)
+{
+	unsigned char i = 0;
+	while (filename[i] != '.')
+		i++;
+	filename[i] = '\0';
+}
+
 
 int main()
 {
@@ -210,21 +260,31 @@ int main()
 	char* input_string;
 	input_string = new char[100];
 	scanf("%s", input_string);
-	if ((fp = fopen(input_string/*"dump.ts"*/, "rb")) == NULL)
+	if ((fp = fopen(input_string, "rb")) == NULL)
 	{
 		printf("Couldn't open file\n");
 		system("pause");
 		return 0;
 	}
 	printf("\nFile found. Processing...\n\n");
-	strcat(input_string, "_output.txt");
-	FILE* fout = fopen(input_string, "wt");
+	RemoveExtension(input_string);
+	char* output_filename = new char[strlen(input_string) + 12];
+	char* inner_ts_filename = new char[strlen(input_string) + 10];
+	strcpy(output_filename, input_string); strcat(output_filename, "_output.txt");
+	strcpy(inner_ts_filename, input_string); strcat(inner_ts_filename, "_inner.ts");
+	FILE* fout = fopen(output_filename, "wt");
+	FILE* f_inner = fopen(inner_ts_filename,"wb");
 	delete[] input_string;
+	delete[] output_filename;
+	delete[] inner_ts_filename;
+
 	fprintf(fout, "      # type pkt_count sframe_idx stream_id payl_len frame_idx PLP_ID #_BB ILFS   DFL CRC8^mode calc'd_CRC32    CRC32 errors\n\n");
 
 	ts_byte_counter = 0;
 	packet_counter = 0;
 	first_accumulation = false;
+	inner_ts_start_found = false;
+	actual_syncd = 0;
 	crc previous_crc;
 	unsigned int crc_32;
 	unsigned char previous_pkt_count = 0;
@@ -271,7 +331,8 @@ int main()
 		fprintf(fout, "%5d ", current_bbframe_info.dfl);
 		fprintf(fout, "       %02x ", current_bbframe_info.crc8_xor_mode);
 
-		temp_array = AccumulateBytes(fp, current_bbframe_info.dfl, NOT_PAYL);
+		temp_array = AccumulateBytes(fp, current_bbframe_info.dfl, PAYLOAD);
+		SendToFile(f_inner, temp_array, current_bbframe_info.dfl);
 		previous_crc = crcSlow(temp_array, current_bbframe_info.dfl, previous_crc);
 		fprintf(fout, "    %08x ", previous_crc);
 		delete[] temp_array;
@@ -280,7 +341,7 @@ int main()
 				(current_t2frame_info.type == 0x10) ||
 				(current_t2frame_info.type == 0x11)		)
 	{
-		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len, PAYLOAD);
+		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len, NOT_PAYL);
 
 		if (current_t2frame_info.type == 0x10)
 			current_L1_info = ParseL1(temp_array);
@@ -316,6 +377,7 @@ int main()
 
 	fclose(fp);
 	fclose(fout);
+	fclose(f_inner);
 	system("pause");
 	return 0;
 }
