@@ -379,13 +379,13 @@ int main()
 		fprintf(fout, "plp_num_blocks error ");
 		error_plp_num_blocks = false;
 	}
-	fprintf(fout, "\n");
 	// check pointer_field
 	if ((current_tspacket_info.PUSI == true) && (first_accumulation == true))
 	{
 		if (current_tspacket_info.pointer_value != (ts_byte_counter - current_tspacket_info.header_len))
-			fprintf(fout, "For next T2-MI packet: PF = %d, actual offset = %d\n", current_tspacket_info.pointer_value, (ts_byte_counter - current_tspacket_info.header_len));
+			fprintf(fout, "pointer field error: PF = %d, real offset = %d ", current_tspacket_info.pointer_value, (ts_byte_counter - current_tspacket_info.header_len));
 	}
+	fprintf(fout, "\n");
 
 	if (!feof(fp))
 		goto LOOP;
