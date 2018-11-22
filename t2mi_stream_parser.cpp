@@ -46,12 +46,20 @@ struct L1_info
 	unsigned char plp_num_blocks;
 	bool plp_mode;			// NM = 0, HEM = 1
 };
+struct tstamp_info
+{
+	unsigned char bandwidth;				// 4 bits
+	unsigned long long seconds_since_2000;	// 40 bits
+	unsigned long subseconds;				// 27 bits
+	unsigned short utco;					// 13 bits
+};
 
 // global vars
 ts_packet_info current_tspacket_info;
 t2_frame_info current_t2frame_info;
 bb_frame_info current_bbframe_info;
 L1_info current_L1_info;
+tstamp_info current_tstamp_info;
 unsigned char ts_byte_counter;
 unsigned long long packet_counter;
 bool first_accumulation;
@@ -258,6 +266,24 @@ L1_info ParseL1(unsigned char* L1)
 	return var_L1_info;
 }
 
+tstamp_info ParseTstamp(unsigned char* tstamp)
+{
+	tstamp_info var_tstamp_info;
+	var_tstamp_info.bandwidth = ExtractBits(tstamp[0],3,0);
+	var_tstamp_info.seconds_since_2000 = (	(ExtractBits(tstamp[1], 7, 0) << 32) |
+											(ExtractBits(tstamp[2], 7, 0) << 24) |
+											(ExtractBits(tstamp[3], 7, 0) << 16) |
+											(ExtractBits(tstamp[4], 7, 0) << 8) |
+											ExtractBits(tstamp[5], 7, 0)	);
+	var_tstamp_info.subseconds = (	(ExtractBits(tstamp[6], 7, 0) << 19) |
+									(ExtractBits(tstamp[7], 7, 0) << 11) |
+									(ExtractBits(tstamp[8], 7, 0) << 3) |
+									ExtractBits(tstamp[9], 7, 5)	);
+	var_tstamp_info.utco = ((ExtractBits(tstamp[9], 4, 0) << 8) | ExtractBits(tstamp[10], 7, 0));
+
+	return var_tstamp_info;
+}
+
 void RemoveExtension(char* filename)
 {
 	unsigned char i = 0;
@@ -354,6 +380,8 @@ int main()
 
 		if (current_t2frame_info.type == 0x10)
 			current_L1_info = ParseL1(temp_array);
+		else if (current_t2frame_info.type == 0x20)
+			current_tstamp_info = ParseTstamp(temp_array);
 
 		previous_crc = crc32Slow(temp_array, current_t2frame_info.payload_len, previous_crc);
 		fprintf(fout, "                                               %08x ", previous_crc);
@@ -386,6 +414,10 @@ int main()
 			fprintf(fout, "pointer field error: PF = %d, real offset = %d ", current_tspacket_info.pointer_value, (ts_byte_counter - current_tspacket_info.header_len));
 	}
 	fprintf(fout, "\n");
+
+	// uncomment if you want to fprint subseconds value
+	//if (current_t2frame_info.type == 0x10)		// in the end of T2-MI packet
+	//	fprintf(fout, "subseconds = %d \n", current_tstamp_info.subseconds);
 
 	if (!feof(fp))
 		goto LOOP;
