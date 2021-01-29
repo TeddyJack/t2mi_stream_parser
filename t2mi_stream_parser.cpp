@@ -379,7 +379,14 @@ int main()
 		temp_array = AccumulateBytes(fp, current_t2frame_info.payload_len, OTHER);
 
 		if (current_t2frame_info.type == 0x10)
+		{
 			current_L1_info = ParseL1(temp_array);
+			// uncomment the section below to fprint the L1 contains
+			//fprintf(fout, "\n");
+			//for (unsigned char i = 0; i < 69; i++)
+			//	fprintf(fout, "%02x ", temp_array[i]);
+			//fprintf(fout, "\n                                                     ");
+		}
 		else if (current_t2frame_info.type == 0x20)
 			current_tstamp_info = ParseTstamp(temp_array);
 
